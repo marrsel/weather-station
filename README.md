@@ -35,7 +35,10 @@ data so they are not automatically added to Home Assistant dashboards. I made
 two simple custom dashboards: one for weather data and another for diagnostics
 (optimized for mobile view).
 
+Weather dashboard
 ![Screenshot of the main dashboard](assets/main_dashboard.png)
+
+Diagnostics dashboard
 ![Screenshot of the diagnostics dashboard](assets/diagnostics_dashboard.png)
 
 ## Power
