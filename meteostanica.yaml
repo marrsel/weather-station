@@ -1,0 +1,237 @@
+substitutions:
+  sensor_update: 300s
+
+esphome:
+  name: meteostanica
+  friendly_name: Meteostanica
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  encryption:
+    key: !secret meteostanica_api_key
+
+ota:
+  - platform: esphome
+    password: !secret meteostanica_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  power_save_mode: HIGH
+  fast_connect: True
+
+  ap:
+    ssid: !secret meteostanica_ap_ssid
+    password: !secret meteostanica_ap_password
+
+  manual_ip: 
+    static_ip: !secret meteostanica_wifi_ip
+    gateway: !secret wifi_gateway
+    subnet: !secret wifi_subnet
+    dns1: !secret wifi_dns1
+    dns2: !secret wifi_dns2
+
+captive_portal:
+
+i2c:
+  - id: bus_a
+    sda: 21
+    scl: 22
+    scan: True
+    timeout:
+      milliseconds: 100
+    frequency: 50khz
+
+  - id: bus_b
+    sda: 16
+    scl: 17
+    scan: True
+    frequency: 50khz
+
+ads1115:
+  - address: 0x48
+    i2c_id: bus_a
+
+sensor:
+  - platform: aht10
+    variant: AHT10
+    temperature: 
+      name: Teplota
+      id: aht10_temperature
+    humidity: 
+      name: Relatívna vlhkosť
+      id: aht10_humidity
+    update_interval: "${sensor_update}"
+    i2c_id: bus_a
+
+  - platform: template
+    name: "Rosný bod"
+    lambda: |-
+      return (243.5*(log(id(aht10_humidity).state/100)+((17.67*id(aht10_temperature).state)/
+      (243.5+id(aht10_temperature).state)))/(17.67-log(id(aht10_humidity).state/100)-
+      ((17.67*id(aht10_temperature).state)/(243.5+id(aht10_temperature).state))));
+    unit_of_measurement: °C
+    icon: 'mdi:thermometer-water'
+    accuracy_decimals: 2
+    device_class: temperature
+    state_class: measurement
+    update_interval: "${sensor_update}"
+  
+  - platform: absolute_humidity
+    name: "Absolútna vlhkosť"
+    temperature: aht10_temperature
+    humidity: aht10_humidity
+
+  - platform: template
+    name: "Pocitová teplota"
+    lambda: |-
+      if (id(aht10_temperature).state < 27.0 || id(aht10_humidity).state < 40.0) {
+        return id(aht10_temperature).state;
+      }
+      float T = (id(aht10_temperature).state * 9.0 / 5.0) + 32.0;
+      float RH = id(aht10_humidity).state;
+      return ((-42.379 + 2.04901523 * T + 10.14333127 * RH - 0.22475541 * T * RH - 0.00683783 * T * T - 0.05481717 * RH * RH + 0.00122874 * T * T * RH + 0.00085282 * T * RH * RH - 0.00000199 * T * T * RH * RH) - 32.0) * 5.0 / 9.0;
+    update_interval: "${sensor_update}"
+    unit_of_measurement: ˚C
+    accuracy_decimals: 2
+    icon: "mdi:thermometer-lines"
+    device_class: temperature
+    state_class: measurement
+
+  - platform: bmp280_i2c
+    temperature: 
+      name: "Teplota BMP280"
+      oversampling: 16X
+      id: bmp280_temperature
+    pressure: 
+      name: Tlak
+      id: bmp280_pressure
+      oversampling: 16X
+    iir_filter: 4X
+    i2c_id: bus_a
+    address: 0x76
+    update_interval: "${sensor_update}"
+
+  - platform: template
+    name: "Tlak na úrovni mora"
+    lambda: |-
+      const float STANDARD_ALTITUDE = 227.0;
+      const float temp = id(aht10_temperature).state + 273.15;
+      const float pressure = id(bmp280_pressure).state;
+      return pressure * powf(1 - (0.0065 * STANDARD_ALTITUDE) / temp, -5.257);
+    update_interval: "${sensor_update}"
+    unit_of_measurement: "hPa"
+    device_class: pressure
+    state_class: measurement
+
+  - platform: pulse_counter
+    pin:
+      number: 18
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    id: zrazky_pulzy
+    internal: True
+    update_interval: "${sensor_update}"
+    total: 
+      name: Zrážky
+      id: zrazky
+      filters: 
+        - multiply: 0.27
+      unit_of_measurement: mm
+      state_class: total_increasing
+      device_class: precipitation
+      accuracy_decimals: 2
+      icon: "mdi:weather-pouring"
+
+  # diagnostics
+  - platform: wifi_signal
+    name: "WiFi signál dB"
+    id: wifi_signal_db
+    update_interval: "${sensor_update}"
+    entity_category: "diagnostic"
+
+  - platform: copy
+    source_id: wifi_signal_db
+    name: "WiFi signál %"
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "%"
+    entity_category: "diagnostic"
+    device_class: signal_strength
+    state_class: measurement
+
+  - platform: ads1115
+    multiplexer: 'A0_GND'
+    gain: 4.096
+    name: "Napätie baterky"
+    update_interval: "${sensor_update}"
+    filters:
+      - lambda: "return x / 0.673;"
+    entity_category: "diagnostic"
+
+  - platform: ads1115
+    multiplexer: 'A1_GND'
+    gain: 4.096
+    name: "Napätie solárneho panelu"
+    filters: 
+      - lambda: "return x / 0.48;"
+    update_interval: "${sensor_update}"
+    entity_category: "diagnostic"
+
+  - platform: aht10
+    variant: AHT10
+    temperature: 
+      name: Interná teplota
+      id: aht10_internal_temperature
+      entity_category: "diagnostic"
+    humidity: 
+      name: Interná relatívna vlhkosť
+      id: aht10_internal_humidity
+      entity_category: "diagnostic"
+    update_interval: "${sensor_update}"
+    i2c_id: bus_b
+
+  - platform: template
+    name: "Interný rosný bod"
+    lambda: |-
+      return (243.5*(log(id(aht10_internal_humidity).state/100)+((17.67*id(aht10_internal_temperature).state)/
+      (243.5+id(aht10_internal_temperature).state)))/(17.67-log(id(aht10_internal_humidity).state/100)-
+      ((17.67*id(aht10_internal_temperature).state)/(243.5+id(aht10_internal_temperature).state))));
+    unit_of_measurement: °C
+    icon: 'mdi:thermometer-water'
+    update_interval: "${sensor_update}"
+    accuracy_decimals: 2
+    entity_category: "diagnostic"
+    state_class: measurement
+    device_class: temperature
+  
+  - platform: absolute_humidity
+    name: "Interná absolútna vlhkosť"
+    temperature: aht10_internal_temperature
+    humidity: aht10_internal_humidity
+    entity_category: "diagnostic"
+
+text_sensor:
+  - platform: uptime
+    name: "Čas prevádzky"
+    entity_category: "diagnostic"
+    update_interval: "${sensor_update}"
+
+button:
+  - platform: restart
+    name: "Reštartovať meteostanicu"
+    entity_category: "diagnostic"
+
+binary_sensor:
+  - platform: status
+    name: Status
+    entity_category: "diagnostic"
