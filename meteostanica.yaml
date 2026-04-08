@@ -1,9 +1,13 @@
 substitutions:
-  sensor_update: 300s
+  sensor_update: never
 
 esphome:
   name: meteostanica
   friendly_name: Meteostanica
+  on_boot:
+    priority: -10
+    then:
+      - script.execute: update_loop
 
 esp32:
   board: esp32dev
@@ -11,6 +15,7 @@ esp32:
     type: arduino
 
 logger:
+  baud_rate: 0
 
 api:
   encryption:
@@ -31,7 +36,7 @@ wifi:
     ssid: !secret meteostanica_ap_ssid
     password: !secret meteostanica_ap_password
 
-  manual_ip: 
+  manual_ip:
     static_ip: !secret meteostanica_wifi_ip
     gateway: !secret wifi_gateway
     subnet: !secret wifi_subnet
@@ -62,14 +67,15 @@ ads1115:
 sensor:
   - platform: aht10
     variant: AHT10
-    temperature: 
+    temperature:
       name: Teplota
       id: aht10_temperature
-    humidity: 
+    humidity:
       name: Relatívna vlhkosť
       id: aht10_humidity
     update_interval: "${sensor_update}"
     i2c_id: bus_a
+    id: aht10_sensor
 
   - platform: template
     name: "Rosný bod"
@@ -78,12 +84,13 @@ sensor:
       (243.5+id(aht10_temperature).state)))/(17.67-log(id(aht10_humidity).state/100)-
       ((17.67*id(aht10_temperature).state)/(243.5+id(aht10_temperature).state))));
     unit_of_measurement: °C
-    icon: 'mdi:thermometer-water'
+    icon: "mdi:thermometer-water"
     accuracy_decimals: 2
     device_class: temperature
     state_class: measurement
     update_interval: "${sensor_update}"
-  
+    id: dew_point
+
   - platform: absolute_humidity
     name: "Absolútna vlhkosť"
     temperature: aht10_temperature
@@ -104,13 +111,14 @@ sensor:
     icon: "mdi:thermometer-lines"
     device_class: temperature
     state_class: measurement
+    id: feels_like
 
   - platform: bmp280_i2c
-    temperature: 
+    temperature:
       name: "Teplota BMP280"
       oversampling: 16X
       id: bmp280_temperature
-    pressure: 
+    pressure:
       name: Tlak
       id: bmp280_pressure
       oversampling: 16X
@@ -118,6 +126,7 @@ sensor:
     i2c_id: bus_a
     address: 0x76
     update_interval: "${sensor_update}"
+    id: bmp280_sensor
 
   - platform: template
     name: "Tlak na úrovni mora"
@@ -130,6 +139,7 @@ sensor:
     unit_of_measurement: "hPa"
     device_class: pressure
     state_class: measurement
+    id: sea_level_preassure
 
   - platform: pulse_counter
     pin:
@@ -141,10 +151,10 @@ sensor:
     id: zrazky_pulzy
     internal: True
     update_interval: "${sensor_update}"
-    total: 
+    total:
       name: Zrážky
       id: zrazky
-      filters: 
+      filters:
         - multiply: 0.27
       unit_of_measurement: mm
       state_class: total_increasing
@@ -170,35 +180,38 @@ sensor:
     state_class: measurement
 
   - platform: ads1115
-    multiplexer: 'A0_GND'
+    multiplexer: "A0_GND"
     gain: 4.096
     name: "Napätie baterky"
     update_interval: "${sensor_update}"
     filters:
       - lambda: "return x / 0.673;"
     entity_category: "diagnostic"
+    id: ads1115_battery
 
   - platform: ads1115
-    multiplexer: 'A1_GND'
+    multiplexer: "A1_GND"
     gain: 4.096
     name: "Napätie solárneho panelu"
-    filters: 
+    filters:
       - lambda: "return x / 0.48;"
     update_interval: "${sensor_update}"
     entity_category: "diagnostic"
+    id: ads1115_solar
 
   - platform: aht10
     variant: AHT10
-    temperature: 
+    temperature:
       name: Interná teplota
       id: aht10_internal_temperature
       entity_category: "diagnostic"
-    humidity: 
+    humidity:
       name: Interná relatívna vlhkosť
       id: aht10_internal_humidity
       entity_category: "diagnostic"
     update_interval: "${sensor_update}"
     i2c_id: bus_b
+    id: aht10_internal_sensor
 
   - platform: template
     name: "Interný rosný bod"
@@ -207,13 +220,14 @@ sensor:
       (243.5+id(aht10_internal_temperature).state)))/(17.67-log(id(aht10_internal_humidity).state/100)-
       ((17.67*id(aht10_internal_temperature).state)/(243.5+id(aht10_internal_temperature).state))));
     unit_of_measurement: °C
-    icon: 'mdi:thermometer-water'
+    icon: "mdi:thermometer-water"
     update_interval: "${sensor_update}"
     accuracy_decimals: 2
     entity_category: "diagnostic"
     state_class: measurement
     device_class: temperature
-  
+    id: dew_point_internal
+
   - platform: absolute_humidity
     name: "Interná absolútna vlhkosť"
     temperature: aht10_internal_temperature
@@ -225,13 +239,70 @@ text_sensor:
     name: "Čas prevádzky"
     entity_category: "diagnostic"
     update_interval: "${sensor_update}"
+    id: uptime_sensor
+
+binary_sensor:
+  - platform: status
+    name: Status
+    update_interval: "${sensor_update}"
+    entity_category: "diagnostic"
+    id: status_sensor
 
 button:
   - platform: restart
     name: "Reštartovať meteostanicu"
     entity_category: "diagnostic"
 
-binary_sensor:
-  - platform: status
-    name: Status
-    entity_category: "diagnostic"
+  - platform: template
+    name: "Aktualizovať senzory"
+    icon: "mdi:refresh"
+    entity_category: diagnostic
+    on_press:
+      then:
+        - script.execute: update_sensors
+        - logger.log: "Manual update triggred!"
+
+number:
+  - platform: template
+    name: "Interval"
+    id: dynamic_interval
+    min_value: 10
+    max_value: 3600
+    step: 10
+    initial_value: 300
+    unit_of_measurement: "s"
+    optimistic: true
+    entity_category: diagnostic
+    on_value:
+      then:
+        - script.stop: update_loop
+        - script.execute: update_loop
+
+script:
+  - id: update_loop
+    mode: restart
+    then:
+      - while:
+          condition:
+            lambda: "return true;"
+          then:
+            - script.execute: update_sensors
+            - delay: !lambda "return id(dynamic_interval).state * 1000;"
+
+  - id: update_sensors
+    mode: parallel
+    then:
+      - component.update: aht10_sensor
+      - component.update: bmp280_sensor
+      - component.update: dew_point
+      - component.update: feels_like
+      - component.update: sea_level_preassure
+      - component.update: zrazky_pulzy
+      - component.update: wifi_signal_db
+      - component.update: ads1115_battery
+      - component.update: ads1115_solar
+      - component.update: aht10_internal_sensor
+      - component.update: dew_point_internal
+      - component.update: uptime_sensor
+      - component.update: status_sensor
+
