@@ -32,6 +32,9 @@ wifi:
   power_save_mode: HIGH
   fast_connect: True
 
+  output_power: 15dB
+  post_connect_roaming: False
+
   ap:
     ssid: !secret meteostanica_ap_ssid
     password: !secret meteostanica_ap_password
@@ -53,6 +56,8 @@ i2c:
     timeout:
       milliseconds: 100
     frequency: 50khz
+    sda_pullup_enabled: False
+    scl_pullup_enabled: False
 
   - id: bus_b
     sda: 16
@@ -62,7 +67,8 @@ i2c:
 
 ads1115:
   - address: 0x48
-    i2c_id: bus_a
+    i2c_id: bus_b
+    id: ads1115_sensor
 
 sensor:
   - platform: aht10
@@ -112,34 +118,6 @@ sensor:
     device_class: temperature
     state_class: measurement
     id: feels_like
-
-  - platform: bmp280_i2c
-    temperature:
-      name: "Teplota BMP280"
-      oversampling: 16X
-      id: bmp280_temperature
-    pressure:
-      name: Tlak
-      id: bmp280_pressure
-      oversampling: 16X
-    iir_filter: 4X
-    i2c_id: bus_a
-    address: 0x76
-    update_interval: "${sensor_update}"
-    id: bmp280_sensor
-
-  - platform: template
-    name: "Tlak na úrovni mora"
-    lambda: |-
-      const float STANDARD_ALTITUDE = 227.0;
-      const float temp = id(aht10_temperature).state + 273.15;
-      const float pressure = id(bmp280_pressure).state;
-      return pressure * powf(1 - (0.0065 * STANDARD_ALTITUDE) / temp, -5.257);
-    update_interval: "${sensor_update}"
-    unit_of_measurement: "hPa"
-    device_class: pressure
-    state_class: measurement
-    id: sea_level_preassure
 
   - platform: pulse_counter
     pin:
@@ -238,7 +216,7 @@ text_sensor:
   - platform: uptime
     name: "Čas prevádzky"
     entity_category: "diagnostic"
-    update_interval: "${sensor_update}"
+    update_interval: 300s
     id: uptime_sensor
 
 binary_sensor:
@@ -292,17 +270,23 @@ script:
   - id: update_sensors
     mode: parallel
     then:
+      - delay: 50ms
       - component.update: aht10_sensor
-      - component.update: bmp280_sensor
+      - delay: 50ms
       - component.update: dew_point
+      - delay: 50ms
       - component.update: feels_like
-      - component.update: sea_level_preassure
+      - delay: 50ms
       - component.update: zrazky_pulzy
+      - delay: 50ms
       - component.update: wifi_signal_db
-      - component.update: ads1115_battery
-      - component.update: ads1115_solar
+      - delay: 50ms
       - component.update: aht10_internal_sensor
+      - delay: 50ms
       - component.update: dew_point_internal
-      - component.update: uptime_sensor
+      - delay: 50ms
       - component.update: status_sensor
-
+      - delay: 500ms
+      - component.update: ads1115_battery
+      - delay: 50ms
+      - component.update: ads1115_solar
